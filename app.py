@@ -768,6 +768,7 @@ with tab_pred:
         }
 
         predicted = run_prediction(inputs, artefacts)
+        estimate_mode = False
 
         with col_res:
             if predicted is None:
@@ -784,70 +785,97 @@ with tab_pred:
                 cong_mult = 1 + (congestion_idx - 5) * 0.015
                 maint_add = maint_delay * 0.6
                 predicted = round(base * weather_mult * cong_mult + maint_add + unload_start_delay * 0.4, 1)
-                st.info("Model artefacts not found — showing heuristic estimate.", icon="ℹ️")
+                estimate_mode = True
+                st.info("Model artefacts not found. Displaying heuristic estimate.", icon="ℹ️")
 
             delta = predicted - planned_trnrnd
-            status_color = "#F44336" if delta > 10 else "#FF9800" if delta > 0 else "#4CAF50"
-            status_label = (
-                f"🔴 +{delta:.0f} min DELAY"  if delta > 10  else
-                f"🟡 +{delta:.0f} min SLIGHT DELAY" if delta > 0 else
-                f"🟢 {delta:.0f} min AHEAD OF PLAN"
+            status = "Delayed" if delta > 0 else "On Time / Early"
+            status_color = "#2E7D32" if delta <= 0 else "#D32F2F"
+            delta_text = f"{delta:+.0f} min vs plan"
+
+            k1, k2, k3 = st.columns(3)
+            k1.metric("Predicted Turnaround", f"{predicted:.0f} min")
+            k1.markdown(
+                f"<p style='margin:4px 0 0;font-weight:600;color:{status_color};'>{delta_text}</p>",
+                unsafe_allow_html=True,
             )
+            k2.metric("Operational Status", status)
+            k3.metric("Planning Confidence", "Estimated" if estimate_mode else "Model-based")
 
             st.markdown(
                 f"""
-                <div style="background:#1a1a2e;border-radius:12px;padding:24px;border-left:6px solid {status_color};">
-                    <h2 style="color:#fff;margin:0 0 4px;">Predicted Turnaround</h2>
-                    <h1 style="color:{status_color};font-size:3.5rem;margin:0;">{predicted:.0f} <span style="font-size:1.5rem">min</span></h1>
-                    <p style="color:#aaa;margin:8px 0 0;">{status_label}</p>
-                    <hr style="border-color:#333;margin:16px 0;">
-                    <table style="color:#ddd;width:100%;font-size:0.95rem;">
-                        <tr><td>Airline</td><td><b>{airline_code}</b></td></tr>
-                        <tr><td>Aircraft</td><td><b>{aircraft_type}</b></td></tr>
-                        <tr><td>Route</td><td><b>{arrival_airport} → {departure_airport}</b></td></tr>
-                        <tr><td>Flight Type</td><td><b>{flight_type}</b></td></tr>
-                        <tr><td>Weather</td><td><b>{weather_cond}</b></td></tr>
-                        <tr><td>Congestion</td><td><b>{congestion_idx}/10</b></td></tr>
-                        <tr><td>Planned</td><td><b>{planned_trnrnd} min</b></td></tr>
-                    </table>
+                <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:14px 16px;">
+                    <div style="display:flex;justify-content:space-between;align-items:center;">
+                        <span style="font-weight:600;color:#0f172a;">Flight Summary</span>
+                        <span style="font-weight:700;color:{status_color};">{status}</span>
+                    </div>
+                    <div style="margin-top:8px;color:#334155;font-size:0.95rem;line-height:1.5;">
+                        <b>{airline_code}</b> · {flight_type} · {aircraft_type}<br>
+                        Route: <b>{arrival_airport} → {departure_airport}</b> · Weather: <b>{weather_cond}</b> · Congestion: <b>{congestion_idx}/10</b><br>
+                        Planned Turnaround: <b>{planned_trnrnd} min</b> · Predicted: <b>{predicted:.0f} min</b>
+                    </div>
                 </div>
                 """,
                 unsafe_allow_html=True,
             )
 
-        # ── Gauge chart ──────────────────────────────────────────────────────
-        st.markdown("#### Prediction Breakdown")
+        # ── Professional charts from prediction output ───────────────────────
+        st.markdown("#### Prediction Insights")
         total_svc = (
             unloading_dur + loading_dur + fueling_dur
             + cleaning_dur + catering_dur + security_dur
         )
+
+        weather_impact = round({"Clear": 0, "Cloudy": 2, "Rain": 5, "Fog": 8, "Storm": 18, "Snow": 15}.get(weather_cond, 0), 1)
+        congestion_overhead = round((congestion_idx - 1) * 1.5, 1)
+        planned_buffer = max(0, planned_trnrnd - total_svc)
+
         breakdown = {
             "Total Service Duration": total_svc,
-            "Planned Buffer":         max(0, planned_trnrnd - total_svc),
-            "Congestion Overhead":    round((congestion_idx - 1) * 1.5, 1),
-            "Weather Impact":         round({"Clear":0,"Cloudy":2,"Rain":5,"Fog":8,"Storm":18,"Snow":15}.get(weather_cond, 0), 1),
+            "Planned Buffer": planned_buffer,
+            "Congestion Overhead": congestion_overhead,
+            "Weather Impact": weather_impact,
             "Maintenance Delay":      maint_delay,
             "Other / Residual":       max(0, round(predicted - total_svc - maint_delay, 1)),
         }
         bk_df = pd.DataFrame(list(breakdown.items()), columns=["Component", "Minutes"])
         bk_df = bk_df[bk_df["Minutes"] > 0]
 
-        fig, ax = plt.subplots(figsize=(9, 3))
-        left = 0
-        colors_bk = ["#2196F3","#90CAF9","#FF9800","#4FC3F7","#F44336","#B0BEC5"]
-        for i, (_, row) in enumerate(bk_df.iterrows()):
-            ax.barh(0, row["Minutes"], left=left, color=colors_bk[i % len(colors_bk)],
-                    edgecolor="white", linewidth=1.5, label=f"{row['Component']} ({row['Minutes']:.0f} min)")
-            left += row["Minutes"]
-        ax.axvline(predicted, color="red", lw=2.5, ls="--", label=f"Predicted: {predicted:.0f} min")
-        ax.axvline(planned_trnrnd, color="orange", lw=2, ls=":", label=f"Planned: {planned_trnrnd} min")
-        ax.set_yticks([])
-        ax.set_xlabel("Minutes")
-        ax.set_title("Turnaround Breakdown", fontweight="bold")
-        ax.legend(bbox_to_anchor=(1.01, 1), loc="upper left", fontsize=8)
-        plt.tight_layout()
-        st.pyplot(fig)
-        plt.close()
+        c_chart1, c_chart2 = st.columns([1, 1])
+
+        with c_chart1:
+            fig, ax = plt.subplots(figsize=(6.2, 4.1))
+            labels = ["Planned", "Predicted"]
+            vals = [planned_trnrnd, predicted]
+            bar_colors = ["#64748b", status_color]
+            bars = ax.bar(labels, vals, color=bar_colors, width=0.55)
+            ax.set_title("Plan vs Predicted Turnaround", fontweight="bold")
+            ax.set_ylabel("Minutes")
+            ax.grid(axis="y", linestyle="--", alpha=0.3)
+            for bar, v in zip(bars, vals):
+                ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 1.2, f"{v:.0f}",
+                        ha="center", va="bottom", fontsize=10, fontweight="bold")
+            ax.spines["top"].set_visible(False)
+            ax.spines["right"].set_visible(False)
+            plt.tight_layout()
+            st.pyplot(fig)
+            plt.close()
+
+        with c_chart2:
+            fig, ax = plt.subplots(figsize=(7.4, 4.1))
+            colors_bk = ["#2563eb", "#7dd3fc", "#f59e0b", "#06b6d4", "#ef4444", "#94a3b8"]
+            bars = ax.barh(bk_df["Component"], bk_df["Minutes"], color=colors_bk[:len(bk_df)], edgecolor="white")
+            ax.set_title("Predicted Time Composition", fontweight="bold")
+            ax.set_xlabel("Minutes")
+            ax.grid(axis="x", linestyle="--", alpha=0.25)
+            for bar in bars:
+                w = bar.get_width()
+                ax.text(w + 0.6, bar.get_y() + bar.get_height() / 2, f"{w:.1f}", va="center", fontsize=9)
+            ax.spines["top"].set_visible(False)
+            ax.spines["right"].set_visible(False)
+            plt.tight_layout()
+            st.pyplot(fig)
+            plt.close()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
