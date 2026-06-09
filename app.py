@@ -154,6 +154,337 @@ AIRPORTS = [
     "ORD", "LAX", "AMS", "SYD", "HKG", "ICN",
 ]
 CONGESTION_LEVELS = list(range(1, 11))   # 1–10
+TEST_INPUT_DATA_PATH = "flight_input_test_dataset.csv"
+
+
+@st.cache_data
+def generate_test_flight_dataset(num_records: int = 80, seed: int = SEED) -> pd.DataFrame:
+    """Generate realistic test records keyed by Flight_ID for UI auto-population."""
+    rng = np.random.default_rng(seed)
+    records = []
+    delayed_flags = np.array([1] * (num_records // 2) + [0] * (num_records - num_records // 2))
+    rng.shuffle(delayed_flags)
+
+    for i in range(1, num_records + 1):
+        is_delayed_flight = int(delayed_flags[i - 1])
+        airline = str(rng.choice(AIRLINES))
+        flight_type = str(rng.choice(FLIGHT_TYPES, p=[0.62, 0.38]))
+        aircraft = str(rng.choice(AIRCRAFT_TYPES))
+        weather = str(rng.choice(WEATHER_COND, p=[0.42, 0.24, 0.16, 0.07, 0.07, 0.04]))
+
+        arr_airport = str(rng.choice(AIRPORTS))
+        dep_airport = str(rng.choice([a for a in AIRPORTS if a != arr_airport]))
+        arr_terminal = f"T{int(rng.integers(1, 5))}"
+        dep_terminal = f"T{int(rng.integers(1, 5))}"
+        gate_type = str(rng.choice(GATE_TYPES, p=[0.56, 0.28, 0.16]))
+
+        passengers = int(rng.integers(60, 340))
+        baggage_count = int(max(20, passengers * rng.uniform(0.7, 1.6)))
+        transit_passengers = int(rng.integers(0, max(2, passengers // 4)))
+        cargo_load = float(rng.integers(1200, 48000))
+        cargo_volume = float(np.round(cargo_load / rng.uniform(550, 900), 1))
+
+        special_cargo_count = int(rng.integers(0, 4))
+        dangerous_goods_flag = int(rng.choice([0, 1], p=[0.9, 0.1]))
+
+        assigned_crew = int(rng.integers(6, 28))
+        available_crew = int(max(4, assigned_crew + rng.integers(-3, 4)))
+        crew_experience = float(np.round(rng.uniform(1.0, 18.0), 1))
+        crew_util = float(np.round(np.clip(72 + rng.normal(10, 8), 35, 100), 1))
+
+        fueling_required = int(rng.choice([0, 1], p=[0.12, 0.88]))
+        fueling_duration = int(rng.integers(12, 65) if fueling_required else 0)
+        catering_required = int(rng.choice([0, 1], p=[0.08, 0.92]))
+        catering_duration = int(rng.integers(10, 50) if catering_required else 0)
+        cleaning_required = int(rng.choice([0, 1], p=[0.03, 0.97]))
+        cleaning_duration = int(rng.integers(8, 45) if cleaning_required else 0)
+        unloading_duration = int(rng.integers(18, 70))
+        loading_duration = int(rng.integers(20, 75))
+        security_duration = int(rng.integers(8, 28))
+
+        loader_available = int(rng.choice([0, 1], p=[0.08, 0.92]))
+        tug_available = int(rng.choice([0, 1], p=[0.06, 0.94]))
+        gpu_available = int(rng.choice([0, 1], p=[0.1, 0.9]))
+        belt_loader_count = int(rng.integers(1, 7))
+        equipment_availability_percent = float(np.round((loader_available + tug_available + gpu_available) / 3 * 100, 1))
+
+        active_flights_terminal = int(rng.integers(2, 45))
+        gate_occupancy = float(np.round(rng.uniform(42, 98), 1))
+        apron_congestion = int(rng.integers(1, 11))
+        runway_queue_length = int(rng.integers(0, 22))
+
+        temperature_c = float(np.round(rng.uniform(8, 42), 1))
+        wind_speed = float(np.round(np.clip(rng.normal(20, 12), 0, 100), 1))
+        visibility = float(np.round(np.clip(rng.normal(11, 4.5), 0.5, 20), 1))
+        rainfall = float(np.round(max(0.0, rng.gamma(1.6, 2.2) - 1), 1))
+
+        weather_severity = float(np.round(
+            np.clip(
+                (2.5 if weather in ["Rain", "Fog"] else 5.5 if weather in ["Storm", "Snow"] else 0.8)
+                + (100 - visibility * 5) / 20
+                + wind_speed / 35
+                + rainfall / 8,
+                0,
+                10,
+            ),
+            1,
+        ))
+
+        if is_delayed_flight == 1:
+            arrival_delay = int(np.clip(rng.normal(14 + runway_queue_length * 0.7, 8), 6, 60))
+            fueling_delay = int(np.clip(rng.normal(6 if fueling_required else 2, 3.5), 1, 35))
+            catering_delay = int(np.clip(rng.normal(5 if catering_required else 1.5, 3), 1, 30))
+            crew_delay = int(np.clip(rng.normal(5, 3.5), 1, 25))
+            maintenance_delay = int(np.clip(rng.normal(12, 12), 0, 90))
+        else:
+            arrival_delay = int(np.clip(rng.normal(0.6, 1.0), 0, 3))
+            fueling_delay = int(np.clip(rng.normal(0.3 if fueling_required else 0.0, 0.7), 0, 2))
+            catering_delay = int(np.clip(rng.normal(0.2 if catering_required else 0.0, 0.6), 0, 2))
+            crew_delay = int(np.clip(rng.normal(0.3, 0.8), 0, 2))
+            maintenance_delay = int(np.clip(rng.normal(0.5, 1.2), 0, 5))
+        maintenance_required = int(maintenance_delay > 8)
+
+        sched_arr_hour = int(rng.integers(0, 24))
+        sched_dep_hour = int(np.clip(sched_arr_hour + rng.integers(1, 5), 0, 23))
+        day_of_week = int(rng.integers(0, 7))
+        month = int(rng.integers(1, 13))
+        planned_turnaround = int(
+            np.clip(
+                unloading_duration + loading_duration + fueling_duration + cleaning_duration + catering_duration + security_duration
+                + arrival_delay * 0.35 + crew_delay * 0.2 + 20,
+                45,
+                260,
+            )
+        )
+
+        records.append(
+            {
+                # Required columns from the user request
+                "Flight_ID": f"FL-{i:04d}",
+                "Flight_Number": f"{airline.split()[0][:2].upper()}{int(rng.integers(100, 9999))}",
+                "Airline_Code": airline,
+                "Aircraft_Type": aircraft,
+                "Flight_Type": flight_type,
+                "Arrival_Terminal": arr_terminal,
+                "Departure_Terminal": dep_terminal,
+                "Cargo_Load_KG": cargo_load,
+                "Baggage_Count": baggage_count,
+                "Passenger_Count": passengers,
+                "Special_Cargo_Count": special_cargo_count,
+                "Dangerous_Goods_Flag": dangerous_goods_flag,
+                "Transit_Passenger_Count": transit_passengers,
+                "Assigned_Ground_Crew": assigned_crew,
+                "Crew_Experience_Years": crew_experience,
+                "Fueling_Required": fueling_required,
+                "Fueling_Duration_Minutes": fueling_duration,
+                "Catering_Required": catering_required,
+                "Catering_Duration_Minutes": catering_duration,
+                "Cleaning_Required": cleaning_required,
+                "Cleaning_Duration_Minutes": cleaning_duration,
+                "Loader_Available": loader_available,
+                "Tug_Available": tug_available,
+                "GPU_Available": gpu_available,
+                "Belt_Loader_Count": belt_loader_count,
+                "Active_Flights_At_Terminal": active_flights_terminal,
+                "Gate_Occupancy_Percentage": gate_occupancy,
+                "Apron_Congestion_Index": apron_congestion,
+                "Runway_Queue_Length": runway_queue_length,
+                "Weather_Condition": weather,
+                "Temperature_Celsius": temperature_c,
+                "Wind_Speed_KMPH": wind_speed,
+                "Visibility_KM": visibility,
+                "Rainfall_MM": rainfall,
+                "Arrival_Delay_Minutes": arrival_delay,
+                "Fueling_Delay_Minutes": fueling_delay,
+                "Catering_Delay_Minutes": catering_delay,
+                "Crew_Delay_Minutes": crew_delay,
+                "Maintenance_Delay_Minutes": maintenance_delay,
+                "Delay_Flight": is_delayed_flight,
+                # Extra helper columns for direct widget prefill
+                "Arrival_Airport": arr_airport,
+                "Departure_Airport": dep_airport,
+                "Gate_Type": gate_type,
+                "Scheduled_Arrival_Hour": sched_arr_hour,
+                "Scheduled_Departure_Hour": sched_dep_hour,
+                "Day_Of_Week": day_of_week,
+                "Month": month,
+                "Planned_Turnaround_Minutes": planned_turnaround,
+                "Unloading_Duration_Minutes": unloading_duration,
+                "Loading_Duration_Minutes": loading_duration,
+                "Security_Check_Duration_Minutes": security_duration,
+                "Cargo_Volume_CBM": cargo_volume,
+                "Available_Ground_Crew": available_crew,
+                "Crew_Utilization_Percent": crew_util,
+                "Equipment_Availability_Percent": equipment_availability_percent,
+                "Weather_Severity_Score": weather_severity,
+                "Maintenance_Required_Flag": maintenance_required,
+                "Aircraft_Avg_Turnaround_Minutes": int(np.clip(planned_turnaround + rng.integers(-15, 18), 35, 220)),
+                "Gate_Avg_Turnaround_Minutes": int(np.clip(planned_turnaround + rng.integers(-20, 20), 30, 210)),
+                "Airline_Avg_Turnaround_Minutes": int(np.clip(planned_turnaround + rng.integers(-16, 22), 35, 230)),
+            }
+        )
+
+    return pd.DataFrame(records)
+
+
+@st.cache_data
+def load_or_create_test_flight_data(path: str = TEST_INPUT_DATA_PATH) -> pd.DataFrame:
+    """Load existing test dataset, else generate and persist it."""
+    if os.path.exists(path):
+        df_existing = pd.read_csv(path)
+        if "Delay_Flight" not in df_existing.columns or df_existing.empty:
+            df = generate_test_flight_dataset(num_records=80, seed=SEED)
+            df.to_csv(path, index=False)
+            return df
+        delay_share = float(df_existing["Delay_Flight"].mean())
+        if not (0.49 <= delay_share <= 0.51):
+            df = generate_test_flight_dataset(num_records=len(df_existing), seed=SEED)
+            df.to_csv(path, index=False)
+            return df
+        return df_existing
+    df = generate_test_flight_dataset(num_records=80, seed=SEED)
+    df.to_csv(path, index=False)
+    return df
+
+
+def _pick(options, value, fallback):
+    """Safely choose selectbox index from options."""
+    if value in options:
+        return value
+    return fallback
+
+
+def _safe_float(value, fallback):
+    return fallback if pd.isna(value) else float(value)
+
+
+def _safe_int(value, fallback):
+    return fallback if pd.isna(value) else int(value)
+
+
+def build_prefill(selected_record: pd.Series | None) -> dict:
+    """Build default widget values from selected Flight_ID record."""
+    defaults = {
+        "airline_code": "Emirates",
+        "flight_type": "International",
+        "aircraft_type": "B787",
+        "gate_type": "Contact",
+        "arrival_airport": "DEL",
+        "departure_airport": "SIN",
+        "sched_arr_hour": 14,
+        "sched_dep_hour": 16,
+        "planned_trnrnd": 160,
+        "day_of_week": 2,
+        "month": 6,
+        "unloading_dur": 35,
+        "loading_dur": 40,
+        "fueling_dur": 38,
+        "cleaning_dur": 28,
+        "catering_dur": 30,
+        "security_dur": 12,
+        "unload_start_delay": 3,
+        "cargo_weight": 15000,
+        "cargo_volume": 22.0,
+        "num_uld": 4,
+        "special_cargo": "No",
+        "hazardous_goods": "No",
+        "assigned_crew": 14,
+        "available_crew": 13,
+        "crew_exp": 6.5,
+        "crew_util": 88.0,
+        "congestion_idx": 6,
+        "gate_occupancy": 72.0,
+        "equip_avail": 91.0,
+        "sim_flights": 14,
+        "weather_cond": "Cloudy",
+        "visibility_km": 10.0,
+        "wind_speed": 18.0,
+        "weather_sev": 1.5,
+        "maint_required": "No",
+        "maint_delay": 0,
+        "ac_avg": 87,
+        "gate_avg": 78,
+        "al_avg": 92,
+    }
+
+    if selected_record is None:
+        return defaults
+
+    mapped = {
+        "airline_code": _pick(AIRLINES, selected_record.get("Airline_Code"), defaults["airline_code"]),
+        "flight_type": _pick(FLIGHT_TYPES, selected_record.get("Flight_Type"), defaults["flight_type"]),
+        "aircraft_type": _pick(AIRCRAFT_TYPES, selected_record.get("Aircraft_Type"), defaults["aircraft_type"]),
+        "gate_type": _pick(GATE_TYPES, selected_record.get("Gate_Type"), defaults["gate_type"]),
+        "arrival_airport": _pick(AIRPORTS, selected_record.get("Arrival_Airport"), defaults["arrival_airport"]),
+        "departure_airport": _pick(AIRPORTS, selected_record.get("Departure_Airport"), defaults["departure_airport"]),
+        "sched_arr_hour": _safe_int(selected_record.get("Scheduled_Arrival_Hour"), defaults["sched_arr_hour"]),
+        "sched_dep_hour": _safe_int(selected_record.get("Scheduled_Departure_Hour"), defaults["sched_dep_hour"]),
+        "planned_trnrnd": _safe_int(selected_record.get("Planned_Turnaround_Minutes"), defaults["planned_trnrnd"]),
+        "day_of_week": _safe_int(selected_record.get("Day_Of_Week"), defaults["day_of_week"]),
+        "month": _safe_int(selected_record.get("Month"), defaults["month"]),
+        "unloading_dur": _safe_int(selected_record.get("Unloading_Duration_Minutes"), defaults["unloading_dur"]),
+        "loading_dur": _safe_int(selected_record.get("Loading_Duration_Minutes"), defaults["loading_dur"]),
+        "fueling_dur": _safe_int(selected_record.get("Fueling_Duration_Minutes"), defaults["fueling_dur"]),
+        "cleaning_dur": _safe_int(selected_record.get("Cleaning_Duration_Minutes"), defaults["cleaning_dur"]),
+        "catering_dur": _safe_int(selected_record.get("Catering_Duration_Minutes"), defaults["catering_dur"]),
+        "security_dur": _safe_int(selected_record.get("Security_Check_Duration_Minutes"), defaults["security_dur"]),
+        "unload_start_delay": _safe_int(selected_record.get("Arrival_Delay_Minutes"), defaults["unload_start_delay"]),
+        "cargo_weight": _safe_int(selected_record.get("Cargo_Load_KG"), defaults["cargo_weight"]),
+        "cargo_volume": _safe_float(selected_record.get("Cargo_Volume_CBM"), defaults["cargo_volume"]),
+        "num_uld": _safe_int(selected_record.get("Belt_Loader_Count"), defaults["num_uld"]),
+        "special_cargo": "Yes" if _safe_int(selected_record.get("Special_Cargo_Count"), 0) > 0 else "No",
+        "hazardous_goods": "Yes" if _safe_int(selected_record.get("Dangerous_Goods_Flag"), 0) == 1 else "No",
+        "assigned_crew": _safe_int(selected_record.get("Assigned_Ground_Crew"), defaults["assigned_crew"]),
+        "available_crew": _safe_int(selected_record.get("Available_Ground_Crew"), defaults["available_crew"]),
+        "crew_exp": _safe_float(selected_record.get("Crew_Experience_Years"), defaults["crew_exp"]),
+        "crew_util": _safe_float(selected_record.get("Crew_Utilization_Percent"), defaults["crew_util"]),
+        "congestion_idx": _safe_int(selected_record.get("Apron_Congestion_Index"), defaults["congestion_idx"]),
+        "gate_occupancy": _safe_float(selected_record.get("Gate_Occupancy_Percentage"), defaults["gate_occupancy"]),
+        "equip_avail": _safe_float(selected_record.get("Equipment_Availability_Percent"), defaults["equip_avail"]),
+        "sim_flights": _safe_int(selected_record.get("Active_Flights_At_Terminal"), defaults["sim_flights"]),
+        "weather_cond": _pick(WEATHER_COND, selected_record.get("Weather_Condition"), defaults["weather_cond"]),
+        "visibility_km": _safe_float(selected_record.get("Visibility_KM"), defaults["visibility_km"]),
+        "wind_speed": _safe_float(selected_record.get("Wind_Speed_KMPH"), defaults["wind_speed"]),
+        "weather_sev": _safe_float(selected_record.get("Weather_Severity_Score"), defaults["weather_sev"]),
+        "maint_required": "Yes" if _safe_int(selected_record.get("Maintenance_Required_Flag"), 0) == 1 else "No",
+        "maint_delay": _safe_int(selected_record.get("Maintenance_Delay_Minutes"), defaults["maint_delay"]),
+        "ac_avg": _safe_int(selected_record.get("Aircraft_Avg_Turnaround_Minutes"), defaults["ac_avg"]),
+        "gate_avg": _safe_int(selected_record.get("Gate_Avg_Turnaround_Minutes"), defaults["gate_avg"]),
+        "al_avg": _safe_int(selected_record.get("Airline_Avg_Turnaround_Minutes"), defaults["al_avg"]),
+    }
+
+    # Keep values inside widget bounds to avoid Streamlit range errors.
+    mapped["sched_arr_hour"] = int(np.clip(mapped["sched_arr_hour"], 0, 23))
+    mapped["sched_dep_hour"] = int(np.clip(mapped["sched_dep_hour"], 0, 23))
+    mapped["planned_trnrnd"] = int(np.clip(mapped["planned_trnrnd"], 20, 300))
+    mapped["day_of_week"] = int(np.clip(mapped["day_of_week"], 0, 6))
+    mapped["month"] = int(np.clip(mapped["month"], 1, 12))
+    mapped["unloading_dur"] = int(np.clip(mapped["unloading_dur"], 10, 120))
+    mapped["loading_dur"] = int(np.clip(mapped["loading_dur"], 10, 120))
+    mapped["fueling_dur"] = int(np.clip(mapped["fueling_dur"], 10, 120))
+    mapped["cleaning_dur"] = int(np.clip(mapped["cleaning_dur"], 5, 90))
+    mapped["catering_dur"] = int(np.clip(mapped["catering_dur"], 5, 90))
+    mapped["security_dur"] = int(np.clip(mapped["security_dur"], 5, 60))
+    mapped["unload_start_delay"] = int(np.clip(mapped["unload_start_delay"], 0, 60))
+    mapped["cargo_weight"] = int(np.clip(mapped["cargo_weight"], 500, 60000))
+    mapped["cargo_volume"] = float(np.clip(mapped["cargo_volume"], 1.0, 150.0))
+    mapped["num_uld"] = int(np.clip(mapped["num_uld"], 0, 30))
+    mapped["assigned_crew"] = int(np.clip(mapped["assigned_crew"], 4, 50))
+    mapped["available_crew"] = int(np.clip(mapped["available_crew"], 4, 50))
+    mapped["crew_exp"] = float(np.clip(mapped["crew_exp"], 0.5, 20.0))
+    mapped["crew_util"] = float(np.clip(mapped["crew_util"], 30.0, 100.0))
+    mapped["congestion_idx"] = int(np.clip(mapped["congestion_idx"], 1, 10))
+    mapped["gate_occupancy"] = float(np.clip(mapped["gate_occupancy"], 10.0, 100.0))
+    mapped["equip_avail"] = float(np.clip(mapped["equip_avail"], 40.0, 100.0))
+    mapped["sim_flights"] = int(np.clip(mapped["sim_flights"], 1, 50))
+    mapped["visibility_km"] = float(np.clip(mapped["visibility_km"], 0.5, 20.0))
+    mapped["wind_speed"] = float(np.clip(mapped["wind_speed"], 0.0, 120.0))
+    mapped["weather_sev"] = float(np.clip(mapped["weather_sev"], 0.0, 10.0))
+    mapped["maint_delay"] = int(np.clip(mapped["maint_delay"], 0, 180))
+    mapped["ac_avg"] = int(np.clip(mapped["ac_avg"], 30, 200))
+    mapped["gate_avg"] = int(np.clip(mapped["gate_avg"], 30, 200))
+    mapped["al_avg"] = int(np.clip(mapped["al_avg"], 30, 200))
+    return mapped
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -191,23 +522,52 @@ with tab_pred:
     st.markdown("### Enter Flight Details")
     st.caption("Fill in all fields and click **Predict Turnaround Time** at the bottom.")
 
+    # --- INSERTION: Flight ID test dataset loading + selector ---
+    flight_data = load_or_create_test_flight_data()
+    selected_record = None
+
+    if flight_data is None or flight_data.empty:
+        st.warning("Flight test dataset is empty. Using manual default values.", icon="⚠️")
+    elif "Flight_ID" not in flight_data.columns:
+        st.warning("`Flight_ID` column missing in the test dataset. Using manual default values.", icon="⚠️")
+    else:
+        flight_ids = flight_data["Flight_ID"].dropna().astype(str).unique().tolist()
+        if not flight_ids:
+            st.warning("No valid Flight_ID values found in dataset. Using manual default values.", icon="⚠️")
+        else:
+            selected_flight_id = st.selectbox("Select Flight ID", flight_ids)
+            selected_rows = flight_data[flight_data["Flight_ID"].astype(str) == str(selected_flight_id)]
+            if selected_rows.empty:
+                st.warning("Selected Flight_ID was not found. Using manual default values.", icon="⚠️")
+            else:
+                selected_record = selected_rows.iloc[0]
+                null_cols = selected_record[selected_record.isna()].index.tolist()
+                if null_cols:
+                    st.warning(
+                        "Some fields for the selected Flight_ID contain null values. "
+                        "Defaults are used for missing fields.",
+                        icon="⚠️",
+                    )
+
+    prefill = build_prefill(selected_record)
+
     # ── Section 1: Flight Information ─────────────────────────────────────────
     with st.expander("Flight Information", expanded=True):
         c1, c2, c3, c4 = st.columns(4)
         with c1:
-            airline_code  = st.selectbox("Airline", AIRLINES, index=0)
+            airline_code  = st.selectbox("Airline", AIRLINES, index=AIRLINES.index(prefill["airline_code"]))
         with c2:
-            flight_type   = st.selectbox("Flight Type", FLIGHT_TYPES, index=0)
+            flight_type   = st.selectbox("Flight Type", FLIGHT_TYPES, index=FLIGHT_TYPES.index(prefill["flight_type"]))
         with c3:
-            aircraft_type = st.selectbox("Aircraft Type", AIRCRAFT_TYPES, index=9)
+            aircraft_type = st.selectbox("Aircraft Type", AIRCRAFT_TYPES, index=AIRCRAFT_TYPES.index(prefill["aircraft_type"]))
         with c4:
-            gate_type     = st.selectbox("Gate Type", GATE_TYPES, index=0)
+            gate_type     = st.selectbox("Gate Type", GATE_TYPES, index=GATE_TYPES.index(prefill["gate_type"]))
 
         c5, c6 = st.columns(2)
         with c5:
-            arrival_airport   = st.selectbox("Arrival Airport (IATA)", AIRPORTS, index=0)
+            arrival_airport   = st.selectbox("Arrival Airport (IATA)", AIRPORTS, index=AIRPORTS.index(prefill["arrival_airport"]))
         with c6:
-            departure_airport = st.selectbox("Departure Airport (IATA)", AIRPORTS, index=10)
+            departure_airport = st.selectbox("Departure Airport (IATA)", AIRPORTS, index=AIRPORTS.index(prefill["departure_airport"]))
 
     # ── Section 2: Schedule ────────────────────────────────────────────────────
     with st.expander("Schedule", expanded=True):
@@ -215,16 +575,16 @@ with tab_pred:
         with c1:
             sched_arr_hour  = st.selectbox(
                 "Scheduled Arrival Hour", list(range(0, 24)),
-                index=14, format_func=lambda h: f"{h:02d}:00",
+                index=prefill["sched_arr_hour"], format_func=lambda h: f"{h:02d}:00",
             )
         with c2:
             sched_dep_hour  = st.selectbox(
                 "Scheduled Departure Hour", list(range(0, 24)),
-                index=16, format_func=lambda h: f"{h:02d}:00",
+                index=prefill["sched_dep_hour"], format_func=lambda h: f"{h:02d}:00",
             )
         with c3:
             planned_trnrnd  = st.number_input(
-                "Planned Turnaround (min)", min_value=20, max_value=300, value=160, step=5,
+                "Planned Turnaround (min)", min_value=20, max_value=300, value=prefill["planned_trnrnd"], step=5,
             )
 
         c4, c5, c6 = st.columns(3)
@@ -232,7 +592,7 @@ with tab_pred:
             day_of_week = st.selectbox(
                 "Day of Week", list(range(7)),
                 format_func=lambda d: ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"][d],
-                index=2,
+                index=prefill["day_of_week"],
             )
         with c5:
             month = st.selectbox(
@@ -241,7 +601,7 @@ with tab_pred:
                     "Jan","Feb","Mar","Apr","May","Jun",
                     "Jul","Aug","Sep","Oct","Nov","Dec"
                 ][m - 1],
-                index=5,
+                index=prefill["month"] - 1,
             )
         with c6:
             is_weekend  = int(day_of_week in [5, 6])
@@ -253,18 +613,18 @@ with tab_pred:
     with st.expander("Ground Operations Durations (minutes)", expanded=True):
         c1, c2, c3 = st.columns(3)
         with c1:
-            unloading_dur   = st.number_input("Unloading Duration",  10, 120, 35, 1)
-            loading_dur     = st.number_input("Loading Duration",     10, 120, 40, 1)
+            unloading_dur   = st.number_input("Unloading Duration",  10, 120, prefill["unloading_dur"], 1)
+            loading_dur     = st.number_input("Loading Duration",     10, 120, prefill["loading_dur"], 1)
         with c2:
-            fueling_dur     = st.number_input("Fueling Duration",     10, 120, 38, 1)
-            cleaning_dur    = st.number_input("Cleaning Duration",    5,  90,  28, 1)
+            fueling_dur     = st.number_input("Fueling Duration",     10, 120, prefill["fueling_dur"], 1)
+            cleaning_dur    = st.number_input("Cleaning Duration",    5,  90,  prefill["cleaning_dur"], 1)
         with c3:
-            catering_dur    = st.number_input("Catering Duration",    5,  90,  30, 1)
-            security_dur    = st.number_input("Security Check Dur.",  5,  60,  12, 1)
+            catering_dur    = st.number_input("Catering Duration",    5,  90,  prefill["catering_dur"], 1)
+            security_dur    = st.number_input("Security Check Dur.",  5,  60,  prefill["security_dur"], 1)
 
         c4, c5 = st.columns(2)
         with c4:
-            unload_start_delay = st.number_input("Unloading Start Delay (min)", 0, 60, 3, 1)
+            unload_start_delay = st.number_input("Unloading Start Delay (min)", 0, 60, prefill["unload_start_delay"], 1)
         with c5:
             pass  # spacer
 
@@ -272,29 +632,29 @@ with tab_pred:
     with st.expander("Cargo", expanded=False):
         c1, c2, c3 = st.columns(3)
         with c1:
-            cargo_weight    = st.number_input("Cargo Weight (kg)",   500, 60000, 15000, 500)
+            cargo_weight    = st.number_input("Cargo Weight (kg)",   500, 60000, prefill["cargo_weight"], 500)
         with c2:
-            cargo_volume    = st.number_input("Cargo Volume (cbm)",  1.0, 150.0, 22.0, 0.5)
+            cargo_volume    = st.number_input("Cargo Volume (cbm)",  1.0, 150.0, prefill["cargo_volume"], 0.5)
         with c3:
-            num_uld         = st.number_input("No. of ULD Containers", 0, 30, 4, 1)
+            num_uld         = st.number_input("No. of ULD Containers", 0, 30, prefill["num_uld"], 1)
 
         c4, c5 = st.columns(2)
         with c4:
-            special_cargo   = st.selectbox("Special Cargo?",   ["No", "Yes"], index=0)
+            special_cargo   = st.selectbox("Special Cargo?",   ["No", "Yes"], index=["No", "Yes"].index(prefill["special_cargo"]))
         with c5:
-            hazardous_goods = st.selectbox("Hazardous Goods?", ["No", "Yes"], index=0)
+            hazardous_goods = st.selectbox("Hazardous Goods?", ["No", "Yes"], index=["No", "Yes"].index(prefill["hazardous_goods"]))
 
     # ── Section 5: Crew ───────────────────────────────────────────────────────
     with st.expander("Crew", expanded=False):
         c1, c2, c3, c4 = st.columns(4)
         with c1:
-            assigned_crew   = st.number_input("Assigned Crew Count",    4, 50, 14, 1)
+            assigned_crew   = st.number_input("Assigned Crew Count",    4, 50, prefill["assigned_crew"], 1)
         with c2:
-            available_crew  = st.number_input("Available Crew Count",   4, 50, 13, 1)
+            available_crew  = st.number_input("Available Crew Count",   4, 50, prefill["available_crew"], 1)
         with c3:
-            crew_exp        = st.slider("Avg Crew Experience (yrs)", 0.5, 20.0, 6.5, 0.5)
+            crew_exp        = st.slider("Avg Crew Experience (yrs)", 0.5, 20.0, prefill["crew_exp"], 0.5)
         with c4:
-            crew_util       = st.slider("Crew Utilisation (%)", 30.0, 100.0, 88.0, 0.5)
+            crew_util       = st.slider("Crew Utilisation (%)", 30.0, 100.0, prefill["crew_util"], 0.5)
 
     # ── Section 6: Airport Conditions ────────────────────────────────────────
     with st.expander("Airport Conditions", expanded=False):
@@ -302,44 +662,44 @@ with tab_pred:
         with c1:
             congestion_idx  = st.selectbox(
                 "Congestion Index (1=Low, 10=High)",
-                CONGESTION_LEVELS, index=5,
+                CONGESTION_LEVELS, index=CONGESTION_LEVELS.index(prefill["congestion_idx"]),
             )
         with c2:
-            gate_occupancy  = st.slider("Gate Occupancy (%)",          10.0, 100.0, 72.0, 0.5)
+            gate_occupancy  = st.slider("Gate Occupancy (%)",          10.0, 100.0, prefill["gate_occupancy"], 0.5)
         with c3:
-            equip_avail     = st.slider("Equipment Availability (%)",  40.0, 100.0, 91.0, 0.5)
+            equip_avail     = st.slider("Equipment Availability (%)",  40.0, 100.0, prefill["equip_avail"], 0.5)
         with c4:
-            sim_flights     = st.number_input("Simultaneous Flights at Terminal", 1, 50, 14, 1)
+            sim_flights     = st.number_input("Simultaneous Flights at Terminal", 1, 50, prefill["sim_flights"], 1)
 
     # ── Section 7: Weather ────────────────────────────────────────────────────
     with st.expander("Weather", expanded=False):
         c1, c2, c3, c4 = st.columns(4)
         with c1:
-            weather_cond    = st.selectbox("Weather Condition", WEATHER_COND, index=1)
+            weather_cond    = st.selectbox("Weather Condition", WEATHER_COND, index=WEATHER_COND.index(prefill["weather_cond"]))
         with c2:
-            visibility_km   = st.slider("Visibility (km)",  0.5, 20.0, 10.0, 0.5)
+            visibility_km   = st.slider("Visibility (km)",  0.5, 20.0, prefill["visibility_km"], 0.5)
         with c3:
-            wind_speed      = st.slider("Wind Speed (km/h)", 0.0, 120.0, 18.0, 1.0)
+            wind_speed      = st.slider("Wind Speed (km/h)", 0.0, 120.0, prefill["wind_speed"], 1.0)
         with c4:
-            weather_sev     = st.slider("Weather Severity Score", 0.0, 10.0, 1.5, 0.1)
+            weather_sev     = st.slider("Weather Severity Score", 0.0, 10.0, prefill["weather_sev"], 0.1)
 
     # ── Section 8: Maintenance ────────────────────────────────────────────────
     with st.expander("Maintenance", expanded=False):
         c1, c2 = st.columns(2)
         with c1:
-            maint_required  = st.selectbox("Maintenance Required?", ["No", "Yes"], index=0)
+            maint_required  = st.selectbox("Maintenance Required?", ["No", "Yes"], index=["No", "Yes"].index(prefill["maint_required"]))
         with c2:
-            maint_delay     = st.number_input("Maintenance Delay (min)", 0, 180, 0, 5)
+            maint_delay     = st.number_input("Maintenance Delay (min)", 0, 180, prefill["maint_delay"], 5)
 
     # ── Section 9: Historical Averages ────────────────────────────────────────
     with st.expander(" Historical Averages (contextual, not leakage)", expanded=False):
         c1, c2, c3 = st.columns(3)
         with c1:
-            ac_avg  = st.number_input("Aircraft Avg Turnaround (min)", 30, 200, 87, 1)
+            ac_avg  = st.number_input("Aircraft Avg Turnaround (min)", 30, 200, prefill["ac_avg"], 1)
         with c2:
-            gate_avg = st.number_input("Gate Avg Turnaround (min)",    30, 200, 78, 1)
+            gate_avg = st.number_input("Gate Avg Turnaround (min)",    30, 200, prefill["gate_avg"], 1)
         with c3:
-            al_avg  = st.number_input("Airline Avg Turnaround (min)", 30, 200, 92, 1)
+            al_avg  = st.number_input("Airline Avg Turnaround (min)", 30, 200, prefill["al_avg"], 1)
 
     # ── Predict button ────────────────────────────────────────────────────────
     st.markdown("---")
