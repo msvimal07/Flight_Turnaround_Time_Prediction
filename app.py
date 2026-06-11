@@ -51,8 +51,10 @@ def load_artefacts():
 
 @st.cache_data
 def load_dataset():
-    """Load the CSV dataset for EDA if present."""
-    path = "airline_ground_ops_dataset.csv"
+    """Load processed CSV for EDA if present, else fallback to raw CSV."""
+    processed_path = "processed_airline_dataset.csv"
+    raw_path = "airline_ground_ops_dataset.csv"
+    path = processed_path if os.path.exists(processed_path) else raw_path
     if os.path.exists(path):
         df = pd.read_csv(path)
         dt_cols = [
@@ -882,13 +884,12 @@ with tab_pred:
 #  TAB 2 — EDA
 # ══════════════════════════════════════════════════════════════════════════════
 with tab_eda:
-
     st.markdown("### Exploratory Data Analysis")
 
     if df_data is None:
         st.warning(
-            " Dataset `airline_ground_ops_dataset.csv` not found. "
-            "Place it in the same directory as `app.py` to enable EDA.",
+            " Dataset not found. Expected `processed_airline_dataset.csv` "
+            "(preferred) or `airline_ground_ops_dataset.csv` in the app directory.",
             icon="",
         )
         st.stop()
@@ -924,6 +925,7 @@ with tab_eda:
     ax1.set_title("Distribution", fontweight="bold")
     ax1.set_xlabel("Turnaround Time (min)")
     ax1.set_ylabel("Frequency")
+    ax1.set_xlim(left=0, right=250)
     ax1.legend()
 
     ax2 = fig.add_subplot(gs[1])
@@ -931,6 +933,7 @@ with tab_eda:
     ax2.fill_between(ax2.lines[0].get_xdata(), ax2.lines[0].get_ydata(), alpha=0.2, color="#2196F3")
     ax2.set_title("KDE", fontweight="bold")
     ax2.set_xlabel("Turnaround Time (min)")
+    ax2.set_xlim(left=0, right=250)
 
     ax3 = fig.add_subplot(gs[2])
     ax3.boxplot(df[TARGET], patch_artist=True, widths=0.5,
@@ -938,6 +941,7 @@ with tab_eda:
                 boxprops=dict(facecolor="#90CAF9"))
     ax3.set_title("Boxplot", fontweight="bold")
     ax3.set_ylabel("Turnaround Time (min)")
+    ax3.set_ylim(0, 250)
     ax3.set_xticks([])
 
     plt.suptitle("Target Variable Analysis", fontsize=14, fontweight="bold")
@@ -1021,11 +1025,13 @@ with tab_eda:
         sns.boxplot(data=df, x="aircraft_type", y=TARGET, order=order_ac, palette="Set2", ax=axes[0, 0])
         axes[0, 0].set_title("Aircraft Type vs Turnaround", fontweight="bold")
         axes[0, 0].tick_params(axis="x", rotation=30)
+        axes[0, 0].set_ylim(0, 250)
 
     if "flight_type" in df.columns:
         sns.violinplot(data=df, x="flight_type", y=TARGET, palette=["#2196F3", "#FF5722"],
                        inner="box", ax=axes[0, 1])
         axes[0, 1].set_title("Flight Type vs Turnaround", fontweight="bold")
+        axes[0, 1].set_ylim(0, 250)
 
     if "weather_condition" in df.columns:
         order_wc = df.groupby("weather_condition")[TARGET].median().sort_values().index
@@ -1033,10 +1039,12 @@ with tab_eda:
                     palette="coolwarm", ax=axes[1, 0])
         axes[1, 0].set_title("Weather Condition vs Turnaround", fontweight="bold")
         axes[1, 0].tick_params(axis="x", rotation=30)
+        axes[1, 0].set_ylim(0, 250)
 
     if "airport_congestion_index" in df.columns:
         sns.boxplot(data=df, x="airport_congestion_index", y=TARGET, palette="YlOrRd", ax=axes[1, 1])
         axes[1, 1].set_title("Congestion Index vs Turnaround", fontweight="bold")
+        axes[1, 1].set_ylim(0, 250)
 
     plt.suptitle("Operational Insights", fontsize=14, fontweight="bold")
     plt.tight_layout()
